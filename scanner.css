@@ -1,0 +1,261 @@
+/* FB Event Scanner - Floating Control Panel & Visual Markers */
+
+#fbe-scanner-panel {
+  position: fixed;
+  top: 80px;
+  right: 20px;
+  width: 320px;
+  background: #242526;
+  border: 1px solid #3e4042;
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  z-index: 99999;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  color: #e4e6eb;
+  overflow: hidden;
+  transition: height 0.3s ease;
+}
+
+#fbe-scanner-panel.minimized {
+  height: 44px;
+  overflow: hidden;
+}
+
+#fbe-scanner-panel .fbe-header {
+  padding: 10px 14px;
+  background: #2d88ff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: move;
+  user-select: none;
+}
+
+#fbe-scanner-panel .fbe-header h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+}
+
+#fbe-scanner-panel .fbe-header .fbe-minimize {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+#fbe-scanner-panel .fbe-body {
+  padding: 12px 14px;
+}
+
+#fbe-scanner-panel .fbe-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+#fbe-scanner-panel .fbe-stat {
+  background: #18191a;
+  padding: 8px 10px;
+  border-radius: 6px;
+  text-align: center;
+}
+
+#fbe-scanner-panel .fbe-stat .fbe-stat-num {
+  font-size: 20px;
+  font-weight: 700;
+  color: #2d88ff;
+  display: block;
+}
+
+#fbe-scanner-panel .fbe-stat .fbe-stat-label {
+  font-size: 10px;
+  color: #b0b3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+#fbe-scanner-panel .fbe-progress {
+  margin-bottom: 12px;
+}
+
+#fbe-scanner-panel .fbe-progress-bar {
+  height: 4px;
+  background: #3e4042;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+#fbe-scanner-panel .fbe-progress-fill {
+  height: 100%;
+  background: #2d88ff;
+  width: 0%;
+  transition: width 0.3s;
+  border-radius: 2px;
+}
+
+#fbe-scanner-panel .fbe-progress-text {
+  font-size: 11px;
+  color: #b0b3b8;
+  margin-top: 4px;
+}
+
+#fbe-scanner-panel .fbe-actions {
+  display: flex;
+  gap: 8px;
+}
+
+#fbe-scanner-panel .fbe-actions button {
+  flex: 1;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+#fbe-scanner-panel .fbe-btn-start {
+  background: #2d88ff;
+  color: #fff;
+}
+#fbe-scanner-panel .fbe-btn-start:hover { background: #1a77f2; }
+#fbe-scanner-panel .fbe-btn-start:disabled {
+  background: #3e4042;
+  color: #65676b;
+  cursor: not-allowed;
+}
+
+#fbe-scanner-panel .fbe-btn-stop {
+  background: #f02849;
+  color: #fff;
+  display: none;
+}
+#fbe-scanner-panel .fbe-btn-stop:hover { background: #d91e3f; }
+
+#fbe-scanner-panel .fbe-btn-export {
+  background: #3a3b3c;
+  color: #e4e6eb;
+}
+#fbe-scanner-panel .fbe-btn-export:hover { background: #4e4f50; }
+#fbe-scanner-panel .fbe-btn-export:disabled {
+  background: #3e4042;
+  color: #65676b;
+  cursor: not-allowed;
+}
+
+#fbe-scanner-panel .fbe-log {
+  margin-top: 10px;
+  max-height: 120px;
+  overflow-y: auto;
+  font-size: 11px;
+  color: #b0b3b8;
+  background: #18191a;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+#fbe-scanner-panel .fbe-log div {
+  padding: 2px 0;
+  border-bottom: 1px solid #2a2b2d;
+}
+
+#fbe-scanner-panel .fbe-log div:last-child {
+  border-bottom: none;
+}
+
+#fbe-scanner-panel .fbe-log .fbe-log-ok { color: #31a24c; }
+#fbe-scanner-panel .fbe-log .fbe-log-err { color: #f02849; }
+#fbe-scanner-panel .fbe-log .fbe-log-skip { color: #f5a623; }
+#fbe-scanner-panel .fbe-log .fbe-log-info { color: #2d88ff; }
+
+/* Visual markers on event cards */
+.fbe-extracted {
+  position: relative;
+  outline: 2px solid #31a24c !important;
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+
+.fbe-extracted::after {
+  content: 'Extracted';
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: #31a24c;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  z-index: 10;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.fbe-extracting {
+  position: relative;
+  outline: 2px solid #2d88ff !important;
+  outline-offset: -2px;
+  border-radius: 8px;
+  animation: fbe-pulse 1.5s infinite;
+}
+
+.fbe-extracting::after {
+  content: 'Extracting...';
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: #2d88ff;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  z-index: 10;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.fbe-error {
+  position: relative;
+  outline: 2px solid #f02849 !important;
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+
+.fbe-error::after {
+  content: 'Failed';
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: #f02849;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  z-index: 10;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+@keyframes fbe-pulse {
+  0%, 100% { outline-color: #2d88ff; }
+  50% { outline-color: rgba(45, 136, 255, 0.3); }
+}
+
+/* Scrollbar for log */
+#fbe-scanner-panel .fbe-log::-webkit-scrollbar { width: 4px; }
+#fbe-scanner-panel .fbe-log::-webkit-scrollbar-track { background: transparent; }
+#fbe-scanner-panel .fbe-log::-webkit-scrollbar-thumb { background: #3e4042; border-radius: 2px; }

@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "FB Event Extractor",
+  "version": "1.2",
+  "description": "Extract event data (image, date, title, description) from Facebook event links",
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://www.facebook.com/*",
+    "https://m.facebook.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.facebook.com/*/events*",
+        "https://www.facebook.com/*/events?*"
+      ],
+      "js": ["scanner.js"],
+      "css": ["scanner.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
