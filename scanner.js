@@ -3,6 +3,34 @@
   // Prevent double injection
   if (document.getElementById('fbe-scanner-panel')) return;
 
+  // Only show panel on pages that have event links or are event-related URLs
+  const url = window.location.href;
+  const isEventPage = /\/(events|past_hosted_events|upcoming_hosted_events)/.test(url)
+    || /sk=(past_hosted_events|upcoming_hosted_events|events)/.test(url);
+
+  if (!isEventPage) {
+    // Not an event URL — check if there are event links on the page after a delay
+    let checkCount = 0;
+    const checker = setInterval(() => {
+      checkCount++;
+      const eventLinks = document.querySelectorAll('a[href*="/events/"]');
+      if (eventLinks.length >= 2) {
+        clearInterval(checker);
+        initScanner();
+      } else if (checkCount > 10) {
+        clearInterval(checker);
+        // No event links found, don't inject
+      }
+    }, 1500);
+    return;
+  }
+
+  initScanner();
+
+  function initScanner() {
+  // Prevent double injection (re-check after async wait)
+  if (document.getElementById('fbe-scanner-panel')) return;
+
   let isRunning = false;
   let shouldStop = false;
   let extractedEvents = [];
@@ -13,7 +41,7 @@
   panel.id = 'fbe-scanner-panel';
   panel.innerHTML = `
     <div class="fbe-header">
-      <h3>FB Event Scanner <span style="font-weight:400;font-size:11px;opacity:0.7">v1.2</span></h3>
+      <h3>FB Event Scanner <span style="font-weight:400;font-size:11px;opacity:0.7">v1.4</span></h3>
       <button class="fbe-minimize" title="Minimize">&#8212;</button>
     </div>
     <div class="fbe-body">
@@ -424,4 +452,5 @@
   }
 
   log('Panel ready. Click "Start Scanning" to begin.', 'info');
+  } // end initScanner
 })();
