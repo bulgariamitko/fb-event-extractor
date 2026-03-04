@@ -35,13 +35,38 @@
   let shouldStop = false;
   let extractedEvents = [];
   let processedKeys = new Set(); // Use full key (eventId + event_time_id) for dedup
+  let wakeLock = null;
+
+  // --- Screen Wake Lock (prevent screen from sleeping during scan) ---
+  async function acquireWakeLock() {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        log('Screen wake lock acquired - screen will stay on', 'ok');
+        wakeLock.addEventListener('release', () => {
+          log('Screen wake lock released', 'info');
+        });
+      }
+    } catch (e) {
+      log('Could not acquire wake lock: ' + e.message, 'skip');
+    }
+  }
+
+  async function releaseWakeLock() {
+    if (wakeLock) {
+      try {
+        await wakeLock.release();
+        wakeLock = null;
+      } catch {}
+    }
+  }
 
   // --- Build the UI panel ---
   const panel = document.createElement('div');
   panel.id = 'fbe-scanner-panel';
   panel.innerHTML = `
     <div class="fbe-header">
-      <h3>FB Event Scanner <span style="font-weight:400;font-size:11px;opacity:0.7">v1.4</span></h3>
+      <h3>FB Event Scanner <span style="font-weight:400;font-size:11px;opacity:0.7">v1.6</span></h3>
       <button class="fbe-minimize" title="Minimize">&#8212;</button>
     </div>
     <div class="fbe-body">
@@ -271,6 +296,7 @@
     startBtn.style.display = 'none';
     stopBtn.style.display = 'block';
     log('=== Scanning started ===', 'info');
+    await acquireWakeLock();
 
     let noNewEventsCount = 0;
     let totalFound = 0;
@@ -336,6 +362,18 @@
 
           card.el.classList.remove('fbe-extracting');
 
+          // Check for rate limiting
+          if (details && details.error === 'RATE_LIMITED') {
+            card.el.classList.remove('fbe-extracting');
+            card.el.classList.add('fbe-error');
+            processedKeys.delete(card.eventKey); // Re-try this event later
+            log('RATE LIMITED by Facebook! Pausing for 2 minutes...', 'err');
+            progressText.textContent = 'Rate limited! Pausing for 2 minutes...';
+            await sleep(120000);
+            log('Resuming after rate limit pause...', 'info');
+            break; // Break inner loop to re-scan
+          }
+
           if (details && details.success) {
             card.el.classList.add('fbe-extracted');
 
@@ -383,12 +421,15 @@
         updateStats();
 
         if (i < newCards.length - 1) {
-          await sleep(2000);
+          // Random delay 5-8s between events to avoid rate limiting
+          const delay = 5000 + Math.floor(Math.random() * 3000);
+          log(`  Waiting ${(delay / 1000).toFixed(1)}s before next...`, 'info');
+          await sleep(delay);
         }
       }
 
       if (!shouldStop) {
-        await sleep(1000);
+        await sleep(3000);
       }
     }
 
@@ -397,6 +438,7 @@
 
   function finishScanning() {
     isRunning = false;
+    releaseWakeLock();
     startBtn.style.display = 'block';
     stopBtn.style.display = 'none';
     startBtn.textContent = 'Scan Again';

@@ -46,7 +46,8 @@ async function handleExtraction(urls) {
     results.push(result);
 
     if (i < urls.length - 1) {
-      await sleep(1500);
+      // Random delay 5-8s between events to avoid rate limiting
+      await sleep(5000 + Math.floor(Math.random() * 3000));
     }
   }
 
@@ -64,17 +65,28 @@ async function extractSingleEvent(url) {
     // Give Facebook's JS time to render the event page
     await sleep(3000);
 
+    // Check if Facebook rate-limited us before injecting content script
+    const [titleCheck] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => document.title + ' ||| ' + document.body.innerText.substring(0, 500)
+    });
+    const pageText = (titleCheck && titleCheck.result) || '';
+    if (/temporarily blocked|you.?re temporarily/i.test(pageText)) {
+      await chrome.tabs.remove(tab.id);
+      return { success: false, url: url, error: 'RATE_LIMITED' };
+    }
+
     // Create a promise that will be resolved when content script sends back results
     const resultPromise = new Promise((resolve) => {
       pendingExtractions.set(tab.id, resolve);
 
-      // Timeout: if content script doesn't respond in 15s, resolve with error
+      // Timeout: if content script doesn't respond in 20s, resolve with error
       setTimeout(() => {
         if (pendingExtractions.has(tab.id)) {
           pendingExtractions.delete(tab.id);
           resolve({ success: false, url: url, error: 'Content script timeout' });
         }
-      }, 15000);
+      }, 20000);
     });
 
     // Inject the content script

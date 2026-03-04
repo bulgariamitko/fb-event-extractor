@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FB Event Extractor",
-  "version": "1.4",
+  "version": "1.6",
   "description": "Extract event data (image, date, title, description) from Facebook event links",
   "permissions": [
     "activeTab",
