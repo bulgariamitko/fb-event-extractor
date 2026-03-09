@@ -9,7 +9,6 @@
     || /sk=(past_hosted_events|upcoming_hosted_events|events)/.test(url);
 
   if (!isEventPage) {
-    // Not an event URL — check if there are event links on the page after a delay
     let checkCount = 0;
     const checker = setInterval(() => {
       checkCount++;
@@ -19,7 +18,6 @@
         initScanner();
       } else if (checkCount > 10) {
         clearInterval(checker);
-        // No event links found, don't inject
       }
     }, 1500);
     return;
@@ -28,45 +26,19 @@
   initScanner();
 
   function initScanner() {
-  // Prevent double injection (re-check after async wait)
   if (document.getElementById('fbe-scanner-panel')) return;
 
   let isRunning = false;
   let shouldStop = false;
   let extractedEvents = [];
-  let processedKeys = new Set(); // Use full key (eventId + event_time_id) for dedup
-  let wakeLock = null;
-
-  // --- Screen Wake Lock (prevent screen from sleeping during scan) ---
-  async function acquireWakeLock() {
-    try {
-      if ('wakeLock' in navigator) {
-        wakeLock = await navigator.wakeLock.request('screen');
-        log('Screen wake lock acquired - screen will stay on', 'ok');
-        wakeLock.addEventListener('release', () => {
-          log('Screen wake lock released', 'info');
-        });
-      }
-    } catch (e) {
-      log('Could not acquire wake lock: ' + e.message, 'skip');
-    }
-  }
-
-  async function releaseWakeLock() {
-    if (wakeLock) {
-      try {
-        await wakeLock.release();
-        wakeLock = null;
-      } catch {}
-    }
-  }
+  let processedKeys = new Set();
 
   // --- Build the UI panel ---
   const panel = document.createElement('div');
   panel.id = 'fbe-scanner-panel';
   panel.innerHTML = `
     <div class="fbe-header">
-      <h3>FB Event Scanner <span style="font-weight:400;font-size:11px;opacity:0.7">v1.6</span></h3>
+      <h3>FB Event Scanner <span style="font-weight:400;font-size:11px;opacity:0.7">v5.1</span></h3>
       <button class="fbe-minimize" title="Minimize">&#8212;</button>
     </div>
     <div class="fbe-body">
@@ -86,10 +58,13 @@
       </div>
       <div class="fbe-actions">
         <button class="fbe-btn-start" id="fbe-start">Start Scanning</button>
-        <button class="fbe-btn-stop" id="fbe-stop">Stop</button>
+        <button class="fbe-btn-start" id="fbe-incognito" style="background:#7c3aed">Start Incognito</button>
+        <button class="fbe-btn-export" id="fbe-fix-missing" style="background:#e67e22;color:#fff">Fix Missing</button>
         <button class="fbe-btn-export" id="fbe-export" disabled>Export JSON</button>
-        <button class="fbe-btn-export" id="fbe-copy-log" title="Copy log to clipboard">Copy Log</button>
+        <button class="fbe-btn-stop" id="fbe-stop" style="grid-column:1/-1">Stop</button>
+        <button class="fbe-btn-export" id="fbe-copy-log" title="Copy log to clipboard" style="grid-column:1/-1">Copy Log</button>
       </div>
+      <input type="file" id="fbe-file-input" accept=".json" style="display:none">
       <div class="fbe-log" id="fbe-log"></div>
     </div>
   `;
@@ -112,7 +87,6 @@
   });
   document.addEventListener('mouseup', () => { isDragging = false; });
 
-  // Minimize toggle
   panel.querySelector('.fbe-minimize').addEventListener('click', () => {
     panel.classList.toggle('minimized');
   });
@@ -123,19 +97,20 @@
   const progressFill = document.getElementById('fbe-progress-fill');
   const progressText = document.getElementById('fbe-progress-text');
   const startBtn = document.getElementById('fbe-start');
+  const incognitoBtn = document.getElementById('fbe-incognito');
+  const fixMissingBtn = document.getElementById('fbe-fix-missing');
   const stopBtn = document.getElementById('fbe-stop');
   const exportBtn = document.getElementById('fbe-export');
   const copyLogBtn = document.getElementById('fbe-copy-log');
+  const fileInput = document.getElementById('fbe-file-input');
   const logEl = document.getElementById('fbe-log');
 
-  // Full log history for copying
   const logHistory = [];
 
   function log(msg, type = '') {
     const timestamp = new Date().toLocaleTimeString();
     const fullMsg = `[${timestamp}] ${msg}`;
     logHistory.push(fullMsg);
-
     const div = document.createElement('div');
     if (type) div.className = 'fbe-log-' + type;
     div.textContent = fullMsg;
@@ -148,7 +123,6 @@
     exportBtn.disabled = extractedEvents.length === 0;
   }
 
-  // --- Build a unique key for an event link (handles recurring events) ---
   function getEventKey(href) {
     const match = href.match(/\/events\/(\d+)/);
     if (!match) return null;
@@ -162,12 +136,67 @@
     }
   }
 
+  // --- Find the actual scrollable container ---
+  function findScrollContainer() {
+    const eventLink = document.querySelector('a[href*="/events/"]');
+    if (eventLink) {
+      let el = eventLink.parentElement;
+      while (el && el !== document.body && el !== document.documentElement) {
+        const style = window.getComputedStyle(el);
+        if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 50) {
+          return el;
+        }
+        el = el.parentElement;
+      }
+    }
+
+    const candidates = [
+      document.querySelector('[role="main"]'),
+      document.querySelector('[data-pagelet="page"]'),
+      document.querySelector('[data-pagelet="ProfileTimeline"]'),
+    ].filter(Boolean);
+
+    for (const el of candidates) {
+      let parent = el;
+      while (parent && parent !== document.body && parent !== document.documentElement) {
+        const style = window.getComputedStyle(parent);
+        if ((style.overflowY === 'auto' || style.overflowY === 'scroll') && parent.scrollHeight > parent.clientHeight + 50) {
+          return parent;
+        }
+        parent = parent.parentElement;
+      }
+    }
+
+    const all = document.querySelectorAll('div');
+    let best = null;
+    let bestDiff = 0;
+    all.forEach(el => {
+      const style = window.getComputedStyle(el);
+      if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+        const diff = el.scrollHeight - el.clientHeight;
+        if (diff > bestDiff && diff > 100) { bestDiff = diff; best = el; }
+      }
+    });
+    return best;
+  }
+
+  function scrollDown(container, amount) {
+    if (container) { container.scrollTop += amount; } else { window.scrollBy(0, amount); }
+  }
+
+  function isAtBottom(container) {
+    if (container) return container.scrollTop + container.clientHeight >= container.scrollHeight - 100;
+    return window.scrollY + window.innerHeight >= document.body.scrollHeight - 100;
+  }
+
+  function getScrollHeight(container) {
+    return container ? container.scrollHeight : document.body.scrollHeight;
+  }
+
   // --- Find event cards on the page ---
   function findEventCards() {
     const eventLinks = [...document.querySelectorAll('a[href*="/events/"]')];
-    const cards = new Map(); // eventKey -> { card element, url, listingData }
-
-    log(`DOM scan: found ${eventLinks.length} total event <a> tags`, 'info');
+    const cards = new Map();
 
     eventLinks.forEach(a => {
       const href = a.href;
@@ -177,7 +206,6 @@
       const eventKey = getEventKey(href);
       if (!eventKey || cards.has(eventKey)) return;
 
-      // Find the parent card container
       let card = a;
       for (let i = 0; i < 15; i++) {
         if (!card.parentElement) break;
@@ -186,41 +214,30 @@
         if (links.length >= 2) break;
       }
 
-      // For recurring events sharing a parent, we need a more specific card element.
-      // Walk back down to find the tightest container that has this specific link.
-      // Check if this card element is already used by another event key.
       let alreadyUsed = false;
       cards.forEach((existing) => {
-        if (existing.el === card && existing.eventKey !== eventKey) {
-          alreadyUsed = true;
-        }
+        if (existing.el === card && existing.eventKey !== eventKey) alreadyUsed = true;
       });
 
       if (alreadyUsed) {
-        // Find a more specific container for this link
         card = a;
         for (let i = 0; i < 15; i++) {
           if (!card.parentElement) break;
           card = card.parentElement;
-          // Accept a smaller container that still has the image
           if (card.querySelector('img') && card.innerText.length > 10) break;
         }
       }
 
-      // Extract listing-level data
       const spans = card.querySelectorAll('span');
       const texts = [];
       spans.forEach(s => {
         const t = s.innerText.trim();
-        if (t && t.length > 2 && t.length < 200 && !texts.includes(t)) {
-          texts.push(t);
-        }
+        if (t && t.length > 2 && t.length < 200 && !texts.includes(t)) texts.push(t);
       });
 
       const img = card.querySelector('img');
       const thumbSrc = img ? img.src : '';
 
-      // Build the full URL preserving event_time_id
       let fullUrl = 'https://www.facebook.com/events/' + match[1] + '/';
       try {
         const parsed = new URL(href);
@@ -229,105 +246,218 @@
       } catch {}
 
       cards.set(eventKey, {
-        el: card,
-        url: fullUrl,
-        eventKey: eventKey,
-        eventId: match[1],
-        listingDate: texts[0] || '',
-        listingTitle: texts[1] || '',
+        el: card, url: fullUrl, eventKey, eventId: match[1],
+        listingDate: texts[0] || '', listingTitle: texts[1] || '',
         listingLocation: texts.find(t =>
-          t.includes(',') || t.includes('·') ||
-          /ул\.|бул\.|пл\.|str|ave|road|blvd/i.test(t)
+          t.includes(',') || t.includes('·') || /ул\.|бул\.|пл\.|str|ave|road|blvd/i.test(t)
         ) || texts[2] || '',
-        thumbnail: thumbSrc,
-        allTexts: texts
+        thumbnail: thumbSrc, allTexts: texts
       });
     });
 
-    log(`Card scan: ${cards.size} unique events (by eventId+timeId)`, 'info');
     return cards;
   }
 
-  // --- Scroll to load more events ---
-  function scrollToLoadMore() {
-    return new Promise(resolve => {
-      const beforeCount = document.querySelectorAll('a[href*="/events/"]').length;
-      log(`Scrolling... (${beforeCount} links before)`, 'info');
-      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+  // --- Scroll helpers ---
+  async function scrollToLoadMore(container) {
+    const beforeHeight = getScrollHeight(container);
 
-      let checks = 0;
-      const interval = setInterval(() => {
-        checks++;
-        const afterCount = document.querySelectorAll('a[href*="/events/"]').length;
-        if (afterCount > beforeCount) {
-          log(`Scroll loaded ${afterCount - beforeCount} new links (total: ${afterCount})`, 'ok');
-          clearInterval(interval);
-          resolve(true);
-        } else if (checks > 10) {
-          log(`Scroll: no new links after ${checks} checks`, 'skip');
-          clearInterval(interval);
-          resolve(false);
-        }
-      }, 800);
-    });
+    for (let i = 0; i < 50; i++) {
+      if (shouldStop) return false;
+      scrollDown(container, 300);
+      await sleep(150);
+      if (isAtBottom(container)) break;
+    }
+
+    for (let wait = 0; wait < 8; wait++) {
+      await sleep(2000);
+      if (shouldStop) return false;
+      const newHeight = getScrollHeight(container);
+      if (newHeight > beforeHeight + 100) {
+        log(`Page grew: ${beforeHeight} -> ${newHeight} (+${newHeight - beforeHeight}px)`, 'ok');
+        scrollDown(container, 300);
+        await sleep(1500);
+        return true;
+      }
+      scrollDown(container, 100);
+      await sleep(200);
+      scrollDown(container, -50);
+    }
+    return false;
   }
 
-  // --- Extract full details from an event page (via background tab) ---
+  async function scrollToLoadAll(container) {
+    log('Scrolling to load all events...', 'info');
+    let noGrowthRounds = 0;
+
+    while (!shouldStop) {
+      const beforeHeight = getScrollHeight(container);
+      const beforeCards = findEventCards().size;
+
+      for (let i = 0; i < 50; i++) {
+        if (shouldStop) return;
+        scrollDown(container, 300);
+        await sleep(150);
+        if (isAtBottom(container)) break;
+      }
+
+      let loaded = false;
+      for (let wait = 0; wait < 8; wait++) {
+        await sleep(2000);
+        if (shouldStop) return;
+        const newHeight = getScrollHeight(container);
+        const newCards = findEventCards().size;
+        if (newCards > beforeCards || newHeight > beforeHeight + 100) {
+          log(`Loaded more: ${beforeCards} -> ${newCards} events`, 'ok');
+          foundEl.textContent = newCards;
+          progressText.textContent = `Loading events... (${newCards} found)`;
+          loaded = true;
+          break;
+        }
+        scrollDown(container, 100);
+        await sleep(200);
+        scrollDown(container, -50);
+      }
+
+      if (!loaded) {
+        noGrowthRounds++;
+        if (noGrowthRounds >= 3) { log('No more events loading.', 'ok'); break; }
+        scrollDown(container, -500);
+        await sleep(1000);
+      } else {
+        noGrowthRounds = 0;
+      }
+    }
+  }
+
+  // --- Extract functions ---
   function extractEventDetails(url) {
     return new Promise((resolve) => {
-      chrome.runtime.sendMessage(
-        { action: 'extractSingleEvent', url: url },
-        (response) => {
-          if (chrome.runtime.lastError) {
-            log(`Chrome runtime error: ${chrome.runtime.lastError.message}`, 'err');
-            resolve({ success: false, error: chrome.runtime.lastError.message });
-          } else {
-            resolve(response || { success: false, error: 'No response from background' });
-          }
+      chrome.runtime.sendMessage({ action: 'extractSingleEvent', url }, (response) => {
+        if (chrome.runtime.lastError) {
+          resolve({ success: false, error: chrome.runtime.lastError.message });
+        } else {
+          resolve(response || { success: false, error: 'No response from background' });
         }
-      );
+      });
     });
   }
 
-  // --- Main scan loop ---
+  function extractEventDetailsIncognito(url) {
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({ action: 'extractSingleEventIncognito', url }, (response) => {
+        if (chrome.runtime.lastError) {
+          resolve({ success: false, error: chrome.runtime.lastError.message });
+        } else {
+          resolve(response || { success: false, error: 'No response from background' });
+        }
+      });
+    });
+  }
+
+  // --- Process a single event card ---
+  async function processCard(card, index, total, useIncognito) {
+    processedKeys.add(card.eventKey);
+
+    card.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    await sleep(500);
+
+    card.el.classList.remove('fbe-extracted', 'fbe-error');
+    card.el.classList.add('fbe-extracting');
+
+    const displayName = card.listingTitle || card.eventKey;
+    const mode = useIncognito ? '[Incognito]' : '';
+    progressText.textContent = `${mode} ${index + 1}/${total}: ${displayName}`;
+    progressFill.style.width = Math.round(((index + 1) / total) * 100) + '%';
+
+    log(`[${index + 1}/${total}] ${mode} ${displayName}`, 'info');
+
+    try {
+      const details = useIncognito
+        ? await extractEventDetailsIncognito(card.url)
+        : await extractEventDetails(card.url);
+
+      card.el.classList.remove('fbe-extracting');
+
+      if (details && details.error === 'RATE_LIMITED') {
+        card.el.classList.add('fbe-error');
+        processedKeys.delete(card.eventKey);
+        log('RATE LIMITED! Pausing 2 min...', 'err');
+        progressText.textContent = 'Rate limited! Pausing 2 min...';
+        await sleep(120000);
+        log('Resuming...', 'info');
+        return 'rate_limited';
+      }
+
+      if (details && details.success) {
+        card.el.classList.add('fbe-extracted');
+        extractedEvents.push({
+          eventId: card.eventId, eventKey: card.eventKey, url: card.url,
+          title: details.title || card.listingTitle,
+          date: details.date || card.listingDate,
+          location: details.location || card.listingLocation,
+          description: details.description || '',
+          image: details.image || card.thumbnail,
+          thumbnail: card.thumbnail
+        });
+        log(`  OK: "${details.title || card.listingTitle}"`, 'ok');
+      } else {
+        card.el.classList.add('fbe-extracted');
+        extractedEvents.push({
+          eventId: card.eventId, eventKey: card.eventKey, url: card.url,
+          title: card.listingTitle, date: card.listingDate,
+          location: card.listingLocation, description: '',
+          image: card.thumbnail, thumbnail: card.thumbnail
+        });
+        log(`  Partial: "${card.listingTitle}" | ${details ? details.error : 'unknown'}`, 'skip');
+      }
+    } catch (err) {
+      card.el.classList.remove('fbe-extracting');
+      card.el.classList.add('fbe-error');
+      log(`  ERROR: ${err.message}`, 'err');
+    }
+
+    updateStats();
+    return 'ok';
+  }
+
+  // =============================================
+  // Normal scan: extract visible, scroll, repeat
+  // =============================================
   async function startScanning() {
     isRunning = true;
     shouldStop = false;
     startBtn.style.display = 'none';
+    incognitoBtn.style.display = 'none';
     stopBtn.style.display = 'block';
-    log('=== Scanning started ===', 'info');
-    await acquireWakeLock();
+    log('=== Normal Scan started ===', 'info');
+
+    const container = findScrollContainer();
+    if (container) {
+      log(`Scroll container: <${container.tagName}>`, 'ok');
+    } else {
+      log('Using window scroll', 'info');
+    }
 
     let noNewEventsCount = 0;
-    let totalFound = 0;
 
     while (!shouldStop) {
       const cards = findEventCards();
       const newCards = [];
-
       cards.forEach((data, eventKey) => {
-        if (!processedKeys.has(eventKey)) {
-          newCards.push({ eventKey, ...data });
-        }
+        if (!processedKeys.has(eventKey)) newCards.push({ eventKey, ...data });
       });
 
-      totalFound = cards.size;
-      foundEl.textContent = totalFound;
-
-      log(`Round: ${cards.size} total, ${newCards.length} new, ${processedKeys.size} already processed`, 'info');
+      foundEl.textContent = cards.size;
+      log(`Round: ${cards.size} total, ${newCards.length} new, ${processedKeys.size} done`, 'info');
 
       if (newCards.length === 0) {
-        log('No new events visible, will scroll...', 'info');
-        progressText.textContent = 'Scrolling to load more events...';
-        const gotMore = await scrollToLoadMore();
-
+        log('No new events, scrolling...', 'info');
+        progressText.textContent = 'Scrolling to load more...';
+        const gotMore = await scrollToLoadMore(container);
         if (!gotMore) {
           noNewEventsCount++;
-          log(`No new content attempt ${noNewEventsCount}/3`, 'skip');
-          if (noNewEventsCount >= 3) {
-            log('No more events to load. Done!', 'ok');
-            break;
-          }
+          if (noNewEventsCount >= 3) { log('No more events. Done!', 'ok'); break; }
           await sleep(2000);
           continue;
         }
@@ -339,117 +469,193 @@
 
       for (let i = 0; i < newCards.length; i++) {
         if (shouldStop) break;
-
-        const card = newCards[i];
-        processedKeys.add(card.eventKey);
-
-        card.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        await sleep(500);
-
-        card.el.classList.remove('fbe-extracted', 'fbe-error');
-        card.el.classList.add('fbe-extracting');
-
-        const displayName = card.listingTitle || card.eventKey;
-        progressText.textContent = `Extracting ${i + 1}/${newCards.length}: ${displayName}`;
-        const pct = Math.round(((extractedEvents.length + 1) / totalFound) * 100);
-        progressFill.style.width = Math.min(pct, 100) + '%';
-
-        log(`[${i + 1}/${newCards.length}] Extracting: ${displayName} (key: ${card.eventKey})`, 'info');
-        log(`  URL: ${card.url}`, 'info');
-
-        try {
-          const details = await extractEventDetails(card.url);
-
-          card.el.classList.remove('fbe-extracting');
-
-          // Check for rate limiting
-          if (details && details.error === 'RATE_LIMITED') {
-            card.el.classList.remove('fbe-extracting');
-            card.el.classList.add('fbe-error');
-            processedKeys.delete(card.eventKey); // Re-try this event later
-            log('RATE LIMITED by Facebook! Pausing for 2 minutes...', 'err');
-            progressText.textContent = 'Rate limited! Pausing for 2 minutes...';
-            await sleep(120000);
-            log('Resuming after rate limit pause...', 'info');
-            break; // Break inner loop to re-scan
-          }
-
-          if (details && details.success) {
-            card.el.classList.add('fbe-extracted');
-
-            const event = {
-              eventId: card.eventId,
-              eventKey: card.eventKey,
-              url: card.url,
-              title: details.title || card.listingTitle,
-              date: details.date || card.listingDate,
-              location: details.location || card.listingLocation,
-              description: details.description || '',
-              image: details.image || card.thumbnail,
-              thumbnail: card.thumbnail
-            };
-
-            extractedEvents.push(event);
-            log(`  OK: "${event.title}" | date: ${event.date} | desc: ${event.description ? event.description.substring(0, 60) + '...' : '(empty)'}`, 'ok');
-          } else {
-            // Use listing data as fallback
-            card.el.classList.add('fbe-extracted');
-
-            const event = {
-              eventId: card.eventId,
-              eventKey: card.eventKey,
-              url: card.url,
-              title: card.listingTitle,
-              date: card.listingDate,
-              location: card.listingLocation,
-              description: '',
-              image: card.thumbnail,
-              thumbnail: card.thumbnail
-            };
-
-            extractedEvents.push(event);
-            const reason = details ? details.error : 'unknown';
-            log(`  Partial (listing only): "${card.listingTitle}" | reason: ${reason}`, 'skip');
-            log(`  Listing texts: ${card.allTexts.join(' | ')}`, 'skip');
-          }
-        } catch (err) {
-          card.el.classList.remove('fbe-extracting');
-          card.el.classList.add('fbe-error');
-          log(`  ERROR: ${card.eventKey} - ${err.message}`, 'err');
-        }
-
-        updateStats();
+        const result = await processCard(newCards[i], extractedEvents.length, cards.size, false);
+        if (result === 'rate_limited') break;
 
         if (i < newCards.length - 1) {
-          // Random delay 5-8s between events to avoid rate limiting
           const delay = 5000 + Math.floor(Math.random() * 3000);
-          log(`  Waiting ${(delay / 1000).toFixed(1)}s before next...`, 'info');
+          log(`  Waiting ${(delay / 1000).toFixed(1)}s...`, 'info');
           await sleep(delay);
         }
       }
 
-      if (!shouldStop) {
-        await sleep(3000);
-      }
+      if (!shouldStop) await sleep(3000);
     }
 
     finishScanning();
   }
 
+  // =============================================
+  // Incognito scan: scroll all, then extract
+  // with NO delays (not logged in = no rate limit)
+  // =============================================
+  async function startIncognitoScan() {
+    isRunning = true;
+    shouldStop = false;
+    startBtn.style.display = 'none';
+    incognitoBtn.style.display = 'none';
+    stopBtn.style.display = 'block';
+    log('=== Incognito Scan started ===', 'info');
+    log('Requires "Allow in Incognito" enabled in chrome://extensions', 'info');
+
+    const container = findScrollContainer();
+    if (container) {
+      log(`Scroll container: <${container.tagName}>`, 'ok');
+    } else {
+      log('Using window scroll', 'info');
+    }
+
+    // Step 1: Scroll to load all events
+    progressText.textContent = 'Step 1: Loading all events...';
+    await scrollToLoadAll(container);
+    if (shouldStop) { finishScanning(); return; }
+
+    // Step 2: Collect all event cards
+    const cards = findEventCards();
+    const allCards = [];
+    cards.forEach((data, eventKey) => {
+      if (!processedKeys.has(eventKey)) allCards.push({ eventKey, ...data });
+    });
+
+    foundEl.textContent = allCards.length;
+    log(`Step 2: Extracting ${allCards.length} events via incognito (no delays)`, 'info');
+
+    // Scroll back to top
+    if (container) { container.scrollTop = 0; } else { window.scrollTo(0, 0); }
+    await sleep(500);
+
+    // Step 3: Extract each event in incognito - NO delays
+    for (let i = 0; i < allCards.length; i++) {
+      if (shouldStop) break;
+      const result = await processCard(allCards[i], i, allCards.length, true);
+      if (result === 'rate_limited') { i--; continue; }
+    }
+
+    finishScanning();
+  }
+
+  // =============================================
+  // Fix Missing: load JSON, re-extract events
+  // with empty descriptions via incognito (no delays)
+  // =============================================
+  async function startFixMissing(events) {
+    isRunning = true;
+    shouldStop = false;
+    startBtn.style.display = 'none';
+    incognitoBtn.style.display = 'none';
+    fixMissingBtn.style.display = 'none';
+    stopBtn.style.display = 'block';
+
+    // Load all events into extractedEvents
+    extractedEvents = events;
+    updateStats();
+
+    // Find events with empty description
+    const missing = [];
+    for (let i = 0; i < events.length; i++) {
+      if (!events[i].description || events[i].description.trim() === '') {
+        missing.push(i);
+      }
+    }
+
+    const total = events.length;
+    const missingCount = missing.length;
+    log(`=== Fix Missing started ===`, 'info');
+    log(`Total events: ${total}, with description: ${total - missingCount}, missing: ${missingCount}`, 'info');
+    foundEl.textContent = total;
+
+    if (missingCount === 0) {
+      log('All events already have descriptions!', 'ok');
+      finishScanning();
+      return;
+    }
+
+    log(`Re-extracting ${missingCount} events via incognito (no delays)`, 'info');
+
+    let fixed = 0;
+    for (let j = 0; j < missing.length; j++) {
+      if (shouldStop) break;
+
+      const idx = missing[j];
+      const event = events[idx];
+      const displayName = event.title || event.url;
+      progressText.textContent = `[Fix] ${j + 1}/${missingCount}: ${displayName}`;
+      progressFill.style.width = Math.round(((j + 1) / missingCount) * 100) + '%';
+
+      log(`[${j + 1}/${missingCount}] Fixing: "${displayName}"`, 'info');
+
+      try {
+        const details = await extractEventDetailsIncognito(event.url);
+
+        if (details && details.error === 'RATE_LIMITED') {
+          log('RATE LIMITED! Pausing 2 min...', 'err');
+          progressText.textContent = 'Rate limited! Pausing 2 min...';
+          await sleep(120000);
+          log('Resuming...', 'info');
+          j--; // retry this event
+          continue;
+        }
+
+        if (details && details.success && details.description && details.description.trim()) {
+          extractedEvents[idx].description = details.description;
+          // Also update other fields if they were empty
+          if (!extractedEvents[idx].title && details.title) extractedEvents[idx].title = details.title;
+          if (!extractedEvents[idx].date && details.date) extractedEvents[idx].date = details.date;
+          if (!extractedEvents[idx].location && details.location) extractedEvents[idx].location = details.location;
+          if (!extractedEvents[idx].image && details.image) extractedEvents[idx].image = details.image;
+          fixed++;
+          log(`  OK: got description (${details.description.length} chars)`, 'ok');
+        } else {
+          log(`  SKIP: no description returned | ${details ? details.error || 'empty desc' : 'no response'}`, 'skip');
+        }
+      } catch (err) {
+        log(`  ERROR: ${err.message}`, 'err');
+      }
+
+      updateStats();
+    }
+
+    log(`=== Fix Missing done: ${fixed}/${missingCount} descriptions recovered ===`, 'ok');
+    finishScanning();
+  }
+
   function finishScanning() {
     isRunning = false;
-    releaseWakeLock();
     startBtn.style.display = 'block';
+    incognitoBtn.style.display = 'block';
+    fixMissingBtn.style.display = 'block';
     stopBtn.style.display = 'none';
     startBtn.textContent = 'Scan Again';
+    incognitoBtn.textContent = 'Incognito Again';
     progressText.textContent = `Done! ${extractedEvents.length} events extracted.`;
     progressFill.style.width = '100%';
     log(`=== Finished: ${extractedEvents.length} events total ===`, 'ok');
   }
 
   // --- Event Listeners ---
-  startBtn.addEventListener('click', () => {
-    startScanning();
+  startBtn.addEventListener('click', () => { startScanning(); });
+  incognitoBtn.addEventListener('click', () => { startIncognitoScan(); });
+
+  fixMissingBtn.addEventListener('click', () => { fileInput.click(); });
+  fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const events = JSON.parse(evt.target.result);
+        if (!Array.isArray(events)) {
+          log('Invalid JSON: expected an array of events', 'err');
+          return;
+        }
+        log(`Loaded ${events.length} events from ${file.name}`, 'ok');
+        startFixMissing(events);
+      } catch (err) {
+        log(`Failed to parse JSON: ${err.message}`, 'err');
+      }
+    };
+    reader.readAsText(file);
+    fileInput.value = ''; // reset so same file can be re-selected
   });
 
   stopBtn.addEventListener('click', () => {
@@ -460,24 +666,18 @@
 
   exportBtn.addEventListener('click', () => {
     const jsonData = extractedEvents.map(e => ({
-      title: e.title,
-      date: e.date,
-      location: e.location,
-      description: e.description,
-      image: e.image,
-      url: e.url
+      title: e.title, date: e.date, location: e.location,
+      description: e.description, image: e.image, url: e.url
     }));
-
     const blob = new Blob([JSON.stringify(jsonData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
+    const dlUrl = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
+    a.href = dlUrl;
     a.download = 'fb-events-' + new Date().toISOString().slice(0, 10) + '.json';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
+    URL.revokeObjectURL(dlUrl);
     log('JSON exported!', 'ok');
   });
 
@@ -493,6 +693,6 @@
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  log('Panel ready. Click "Start Scanning" to begin.', 'info');
+  log('Panel ready. Click "Start Scanning" or "Start Incognito".', 'info');
   } // end initScanner
 })();
